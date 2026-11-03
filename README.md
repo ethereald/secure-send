@@ -56,3 +56,7 @@ Configure a real Turnstile site key and secret before exposing room creation pub
 ## Mobile and reconnection behavior
 
 Each device gets a random "Adjective Animal" nickname that you can change. If a phone switches apps and the connection drops, the client automatically rejoins the room when it returns (transfers in progress are cancelled, and a locked room refuses rejoin). See `ARCHITECTURE.md` section 16 for details.
+
+## Live deployment
+
+Deployed at [deployment URL omitted] (Turnstile site key is set in `wrangler.jsonc`; the secret is stored as a Worker secret).

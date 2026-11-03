@@ -1,4 +1,4 @@
-{
+﻿{
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "secure-send",
   "main": "src/worker/index.ts",
@@ -20,6 +20,7 @@
     }
   ],
   "vars": {
-    "TURNSTILE_SITE_KEY": ""
+    "TURNSTILE_SITE_KEY": "0x4AAAAAAFyQRmDpxJcgueO0"
   }
 }
+
