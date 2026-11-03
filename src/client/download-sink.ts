@@ -126,13 +126,12 @@ function beginStreamDownload(
       window.clearTimeout(timeout);
       if (!started) {
         started = true;
-        const anchor = document.createElement("a");
-        anchor.href = `/__download/${encodeURIComponent(transferId)}`;
-        anchor.download = filename;
-        anchor.hidden = true;
-        document.body.appendChild(anchor);
-        anchor.click();
-        anchor.remove();
+        // An <a download> click can bypass the service worker; navigating an iframe always goes through it.
+        const frame = document.createElement("iframe");
+        frame.hidden = true;
+        frame.src = `/__download/${encodeURIComponent(transferId)}`;
+        document.body.appendChild(frame);
+        window.setTimeout(() => frame.remove(), 60_000);
       }
       resolve({
         write(bytes) {
