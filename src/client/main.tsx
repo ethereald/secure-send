@@ -199,6 +199,9 @@ function App(): preact.JSX.Element {
       })
       .catch(() => setNotice("The application server is unavailable."));
 
+    // A secret saved in sessionStorage is only for resuming after a reload; a fresh visit should offer room creation.
+    const navType = (performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined)?.type;
+    if (!location.hash && navType !== "reload") sessionStorage.removeItem("secure-send-secret");
     const secret = secretFromLocation();
     if (secret) {
       stripSecretFromAddressBar();
@@ -664,6 +667,20 @@ function App(): preact.JSX.Element {
             </button>
           </form>
           {isInvite && <p class="fine-print centered">The link secret stays in your browser and is never sent to the server.</p>}
+          {isInvite && (
+            <button
+              type="button"
+              class="button subtle small wide"
+              onClick={() => {
+                sessionStorage.removeItem("secure-send-secret");
+                setJoinKeys(null);
+                setIsInvite(false);
+                setNotice("");
+              }}
+            >
+              Create a new room instead
+            </button>
+          )}
         </div>
       </section>
       <section class="how-it-works">
