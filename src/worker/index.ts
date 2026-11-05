@@ -143,8 +143,8 @@ async function getIceConfig(request: Request, env: Env, roomId: string): Promise
     const iceServers = await createIceServers(env.TURN_KEY_ID, env.TURN_API_TOKEN, roomId);
     return jsonResponse({ iceServers }, 200, { "Cache-Control": "no-store" });
   } catch {
-    console.error("Could not generate TURN credentials.");
-    return jsonResponse({ error: "Room connectivity is not configured." }, 503);
+    console.error("Could not generate TURN credentials; falling back to STUN.");
+    return jsonResponse({ iceServers: await createIceServers(undefined, undefined, roomId) }, 200, { "Cache-Control": "no-store" });
   }
 }
 

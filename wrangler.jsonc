@@ -26,6 +26,6 @@
   ],
   "vars": {
     "TURNSTILE_SITE_KEY": "0x4AAAAAAFyQRmDpxJcgueO0",
-    "TURN_KEY_ID": ""
+    "TURN_KEY_ID": "your-turn-key-id"
   }
 }
