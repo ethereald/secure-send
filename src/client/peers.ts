@@ -151,7 +151,12 @@ export class PeerMesh {
       if (connection.connectionState === "connected") {
         peer.status = peer.transferAttached ? "connected" : "connecting";
       }
-      else if (connection.connectionState === "failed" || connection.connectionState === "closed") peer.status = "disconnected";
+      else if (connection.connectionState === "failed" || connection.connectionState === "closed") {
+        if (connection.connectionState === "failed" && !peer.transferAttached) {
+          this.events.onMessage(id, "Could not connect directly to this device. Its network may block peer-to-peer connections and need a relay (TURN) server.");
+        }
+        peer.status = "disconnected";
+      }
       this.tryAttachTransfers(peer);
       this.publish();
     });
