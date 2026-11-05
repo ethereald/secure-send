@@ -49,7 +49,7 @@ Set `TURNSTILE_SITE_KEY` in `wrangler.jsonc`, save `TURNSTILE_SECRET` as a Worke
 
 STUN is used by default. If some users cannot connect directly, configure Cloudflare Realtime TURN:
 
-1. In your own Cloudflare account, create a Realtime TURN key and an API token with **Calls: Edit** permission. Use your own TURN key; do not rely on the `TURN_KEY_ID` currently shown in this repository's `wrangler.jsonc`—replace it with the ID of the key you created.
+1. In your own Cloudflare account, create a Realtime TURN key and an API token with **Calls: Edit** permission. Use the ID of the key you created; do not commit it to the repository.
 2. For local development, put your key ID and API token in the ignored `.dev.vars` file:
 
    ```dotenv
@@ -57,14 +57,15 @@ STUN is used by default. If some users cannot connect directly, configure Cloudf
    TURN_API_TOKEN=your-turn-api-token
    ```
 
-3. For deployment, set your key ID as `TURN_KEY_ID` in `wrangler.jsonc`, then store the API token as a Worker secret and deploy:
+3. For deployment, store both the key ID and API token as Worker secrets, then deploy:
 
    ```powershell
+   npx wrangler secret put TURN_KEY_ID
    npx wrangler secret put TURN_API_TOKEN
    npm run deploy
    ```
 
-   When prompted, paste your API token. Never commit the token or put it in `wrangler.jsonc`.
+   When prompted, paste the corresponding value for each secret. Neither value needs to be committed to the repository or added to `wrangler.jsonc`.
 
 The Worker uses the key ID and token to request short-lived TURN credentials for room joins; the API token is never sent to browsers. If TURN is not configured, the app continues to use STUN, but connections on some networks may fail. Check Cloudflare Realtime's current pricing before enabling TURN; pricing and included usage can change.
 
@@ -79,7 +80,3 @@ Configure a real Turnstile site key and secret before exposing room creation pub
 ## Mobile and reconnection behavior
 
 Each device gets a random "Adjective Animal" nickname that you can change. If a phone switches apps and the connection drops, the client automatically rejoins the room when it returns (transfers in progress are cancelled, and a locked room refuses rejoin). See `ARCHITECTURE.md` section 16 for details.
-
-## Live deployment
-
-Deployed at [deployment URL omitted] (Turnstile site key is set in `wrangler.jsonc`; the secret is stored as a Worker secret).
