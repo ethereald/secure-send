@@ -45,11 +45,34 @@ One script builds and runs the app in local dev mode. Dev mode (`DEV_MODE=1`) sk
 
 Set `TURNSTILE_SITE_KEY` in `wrangler.jsonc`, save `TURNSTILE_SECRET` as a Worker secret, then run `npm run deploy`. Use HTTPS in production; browser crypto, WebRTC, service-worker downloads, and clipboard access depend on a secure context.
 
+### Optional TURN relay
+
+STUN is used by default. If some users cannot connect directly, configure Cloudflare Realtime TURN:
+
+1. In your own Cloudflare account, create a Realtime TURN key and an API token with **Calls: Edit** permission. Use your own TURN key; do not rely on the `TURN_KEY_ID` currently shown in this repository's `wrangler.jsonc`—replace it with the ID of the key you created.
+2. For local development, put your key ID and API token in the ignored `.dev.vars` file:
+
+   ```dotenv
+   TURN_KEY_ID=your-turn-key-id
+   TURN_API_TOKEN=your-turn-api-token
+   ```
+
+3. For deployment, set your key ID as `TURN_KEY_ID` in `wrangler.jsonc`, then store the API token as a Worker secret and deploy:
+
+   ```powershell
+   npx wrangler secret put TURN_API_TOKEN
+   npm run deploy
+   ```
+
+   When prompted, paste your API token. Never commit the token or put it in `wrangler.jsonc`.
+
+The Worker uses the key ID and token to request short-lived TURN credentials for room joins; the API token is never sent to browsers. If TURN is not configured, the app continues to use STUN, but connections on some networks may fail. Check Cloudflare Realtime's current pricing before enabling TURN; pricing and included usage can change.
+
 ## Current implementation scope
 
 This version includes room creation/joining, opaque room IDs, encrypted signaling, a Durable Object roster and expiry alarm, host-signed TTL/lock/kick/end actions, WebRTC peer connections with optional TURN relay support, manual SAS comparison, per-file receiver approval, chunked AES-GCM transfers, and streamed downloads where service workers are supported.
 
-The WebSocket file-relay fallback and resume-after-disconnect are not implemented yet; transfers require a working WebRTC DataChannel. STUN handles many NATs, but restrictive networks may require TURN. To enable Cloudflare Realtime TURN, create a TURN key, set its ID as `TURN_KEY_ID` in `wrangler.jsonc`, and save an API token with Calls edit permission using `npx wrangler secret put TURN_API_TOKEN`. The Worker requests temporary TURN credentials from Cloudflare for each room join; the long-lived API token is never sent to browsers. For local development, set `TURN_KEY_ID` and `TURN_API_TOKEN` in `.dev.vars`. Without TURN, connections between some networks may still fail. Cloudflare's published pricing includes 1,000 GB of Realtime egress free per month, then $0.05/GB; check current pricing before enabling. The service-worker path streams large downloads without holding the whole file in memory. Browsers without that path use a Blob fallback capped at 200 MiB. On iOS the file is buffered in memory and a "Ready to save" card with a Save button (share sheet) appears. Files are authenticated chunk-by-chunk with AES-GCM; there is no separate whole-file SHA-256 pass.
+The WebSocket file-relay fallback and resume-after-disconnect are not implemented yet; transfers require a working WebRTC DataChannel. The service-worker path streams large downloads without holding the whole file in memory. Browsers without that path use a Blob fallback capped at 200 MiB. On iOS the file is buffered in memory and a "Ready to save" card with a Save button (share sheet) appears. Files are authenticated chunk-by-chunk with AES-GCM; there is no separate whole-file SHA-256 pass.
 
 Configure a real Turnstile site key and secret before exposing room creation publicly. Room creation deliberately fails closed when Turnstile or the rate-limit binding is unavailable.
 
