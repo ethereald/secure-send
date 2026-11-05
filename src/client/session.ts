@@ -8,6 +8,46 @@ export interface WelcomeMessage {
   isLocked: boolean;
 }
 
+function parseIceServers(value: unknown): RTCIceServer[] {
+  if (!isRecord(value) || !Array.isArray(value.iceServers) || value.iceServers.length < 1 || value.iceServers.length > 11) {
+    throw new Error("The room returned invalid connectivity settings.");
+  }
+  return value.iceServers.map((item) => {
+    if (!isRecord(item)) throw new Error("The room returned invalid connectivity settings.");
+    const urls = typeof item.urls === "string"
+      ? [item.urls]
+      : Array.isArray(item.urls) && item.urls.every((url) => typeof url === "string")
+        ? item.urls
+        : [];
+    if (
+      urls.length < 1 ||
+      urls.length > 10 ||
+      urls.some((url) => !/^(stun|stuns|turn|turns):[^\s]{1,2048}$/i.test(url))
+    ) {
+      throw new Error("The room returned invalid connectivity settings.");
+    }
+    let username: string | undefined;
+    let credential: string | undefined;
+    if (item.username !== undefined || item.credential !== undefined) {
+      if (
+        typeof item.username !== "string" ||
+        typeof item.credential !== "string" ||
+        item.username.length > 256 ||
+        item.credential.length > 512 ||
+        !urls.some((url) => /^turns?:/i.test(url))
+      ) {
+        throw new Error("The room returned invalid connectivity settings.");
+      }
+      username = item.username;
+      credential = item.credential;
+    }
+    return {
+      urls: urls.length === 1 ? urls[0] : urls,
+      ...(username !== undefined && credential !== undefined ? { username, credential } : {}),
+    };
+  });
+}
+
 type SessionListener = (message: Record<string, unknown>) => void;
 
 export class RoomSession {
@@ -15,15 +55,17 @@ export class RoomSession {
   readonly socket: WebSocket;
   readonly peerId: string;
   readonly welcome: WelcomeMessage;
+  readonly iceServers: RTCIceServer[];
   private readonly listeners = new Set<SessionListener>();
   private readonly backlog: Record<string, unknown>[] = [];
   private readonly pendingSignals = new Set<Promise<void>>();
 
-  private constructor(keys: RoomKeys, socket: WebSocket, welcome: WelcomeMessage) {
+  private constructor(keys: RoomKeys, socket: WebSocket, welcome: WelcomeMessage, iceServers: RTCIceServer[]) {
     this.keys = keys;
     this.socket = socket;
     this.peerId = welcome.peerId;
     this.welcome = welcome;
+    this.iceServers = iceServers;
     socket.addEventListener("message", (event: MessageEvent) => void this.onMessage(event));
     socket.addEventListener("close", () => {
       for (const listener of this.listeners) listener({ type: "connection-closed" });
@@ -31,6 +73,23 @@ export class RoomSession {
   }
 
   static async connect(keys: RoomKeys): Promise<RoomSession> {
+    let iceResponse: Response;
+    try {
+      iceResponse = await fetch(`/api/rooms/${encodeURIComponent(keys.roomId)}/ice-config`, { cache: "no-store" });
+    } catch {
+      throw new Error("Could not load room connectivity settings.");
+    }
+    if (!iceResponse.ok) {
+      throw new Error("Could not load room connectivity settings.");
+    }
+    let iceServers: RTCIceServer[];
+    try {
+      iceServers = parseIceServers(await iceResponse.json());
+    } catch (error) {
+      if (error instanceof Error && error.message === "The room returned invalid connectivity settings.") throw error;
+      throw new Error("Could not load room connectivity settings.");
+    }
+
     const scheme = location.protocol === "https:" ? "wss:" : "ws:";
     const socket = new WebSocket(
       `${scheme}//${location.host}/api/rooms/${encodeURIComponent(keys.roomId)}/ws`,
@@ -85,7 +144,7 @@ export class RoomSession {
         reject(new Error("This room is unavailable, full, locked, or expired."));
       });
     });
-    return new RoomSession(keys, socket, welcome);
+    return new RoomSession(keys, socket, welcome, iceServers);
   }
 
   subscribe(listener: SessionListener): () => void {

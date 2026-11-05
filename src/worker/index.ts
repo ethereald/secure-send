@@ -1,4 +1,5 @@
 ﻿import { Room } from "./room";
+import { createIceServers } from "./ice";
 import {
   MAX_TTL_SECONDS,
   MIN_TTL_SECONDS,
@@ -18,6 +19,9 @@ interface Env {
   ASSETS: Fetcher;
   ROOM: DurableObjectNamespace;
   CREATE_LIMITER?: RateLimitBinding;
+  ICE_LIMITER?: RateLimitBinding;
+  TURN_KEY_ID?: string;
+  TURN_API_TOKEN?: string;
   TURNSTILE_SECRET?: string;
   TURNSTILE_SITE_KEY?: string;
   DEV_MODE?: string;
@@ -25,7 +29,7 @@ interface Env {
 
 const SECURITY_HEADERS: Record<string, string> = {
   "Content-Security-Policy":
-  "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://challenges.cloudflare.com wss: stun:; frame-src 'self' https://challenges.cloudflare.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+  "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://challenges.cloudflare.com wss: stun: stuns: turn: turns:; frame-src 'self' https://challenges.cloudflare.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
   "Strict-Transport-Security": "max-age=31536000; includeSubDomains; preload",
   "Referrer-Policy": "no-referrer",
   "X-Content-Type-Options": "nosniff",
@@ -124,6 +128,26 @@ async function createRoom(request: Request, env: Env): Promise<Response> {
   return response;
 }
 
+async function getIceConfig(request: Request, env: Env, roomId: string): Promise<Response> {
+  const turnConfigured = Boolean(env.TURN_KEY_ID?.trim() || env.TURN_API_TOKEN?.trim());
+  if (turnConfigured && env.DEV_MODE !== "1") {
+    const remoteIp = request.headers.get("CF-Connecting-IP");
+    if (!env.ICE_LIMITER || !remoteIp) {
+      return jsonResponse({ error: "Room connectivity is not configured." }, 503);
+    }
+    const limit = await env.ICE_LIMITER.limit({ key: remoteIp });
+    if (!limit.success) return jsonResponse({ error: "Too many requests." }, 429);
+  }
+
+  try {
+    const iceServers = await createIceServers(env.TURN_KEY_ID, env.TURN_API_TOKEN, roomId);
+    return jsonResponse({ iceServers }, 200, { "Cache-Control": "no-store" });
+  } catch {
+    console.error("Could not generate TURN credentials.");
+    return jsonResponse({ error: "Room connectivity is not configured." }, 503);
+  }
+}
+
 async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   if (url.pathname === "/api/config" && request.method === "GET") {
@@ -134,6 +158,10 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
   if (url.pathname === "/api/rooms" && request.method === "POST") {
     return createRoom(request, env);
+  }
+  const iceMatch = url.pathname.match(/^\/api\/rooms\/([A-Za-z0-9_-]{22})\/ice-config$/);
+  if (iceMatch && request.method === "GET") {
+    return getIceConfig(request, env, iceMatch[1]);
   }
   const match = url.pathname.match(/^\/api\/rooms\/([A-Za-z0-9_-]{22})\/ws$/);
   if (match && request.method === "GET" && request.headers.get("Upgrade")?.toLowerCase() === "websocket") {

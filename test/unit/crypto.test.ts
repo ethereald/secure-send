@@ -14,8 +14,54 @@ import {
   toBase64Url,
 } from "../../src/client/crypto";
 import { sanitizeFilename } from "../../src/client/download-sink";
+import { createIceServers } from "../../src/worker/ice";
 
 describe("room and transfer cryptography", () => {
+  it("requests temporary Cloudflare TURN credentials server-side", async () => {
+    let requestUrl = "";
+    let requestInit: RequestInit | undefined;
+    const servers = await createIceServers("key-id", "api-token", "room-id", async (input, init) => {
+      requestUrl = String(input);
+      requestInit = init;
+      return Response.json({
+        iceServers: [
+          { urls: ["stun:stun.cloudflare.com:3478"] },
+          {
+            urls: ["turn:turn.cloudflare.com:3478?transport=udp", "turns:turn.cloudflare.com:5349?transport=tcp"],
+            username: "temporary-user",
+            credential: "temporary-credential",
+          },
+        ],
+      }, { status: 201 });
+    });
+
+    expect(requestUrl).toBe("https://rtc.live.cloudflare.com/v1/turn/keys/key-id/credentials/generate-ice-servers");
+    expect(requestInit?.method).toBe("POST");
+    expect(new Headers(requestInit?.headers).get("Authorization")).toBe("Bearer api-token");
+    expect(JSON.parse(String(requestInit?.body))).toEqual({ ttl: 86400, customIdentifier: "room-id" });
+    expect(servers).toEqual([
+      { urls: "stun:stun.cloudflare.com:3478" },
+      {
+        urls: ["turn:turn.cloudflare.com:3478?transport=udp", "turns:turn.cloudflare.com:5349?transport=tcp"],
+        username: "temporary-user",
+        credential: "temporary-credential",
+      },
+    ]);
+  });
+
+  it("uses STUN without TURN settings and rejects incomplete or failed TURN setup", async () => {
+    await expect(createIceServers(undefined, undefined, "room-id")).resolves.toEqual([
+      { urls: "stun:stun.cloudflare.com:3478" },
+    ]);
+    await expect(createIceServers("key-id", undefined, "room-id"))
+      .rejects.toThrow("Cloudflare TURN is not fully configured.");
+    await expect(createIceServers("key-id", "api-token", "room-id", async () => new Response(null, { status: 403 })))
+      .rejects.toThrow("Cloudflare TURN credential generation failed.");
+    await expect(createIceServers("key-id", "api-token", "room-id", async () =>
+      Response.json({ iceServers: [{ urls: ["http://untrusted.invalid"] }] }, { status: 201 }),
+    )).rejects.toThrow("Cloudflare returned invalid ICE settings.");
+  });
+
   it("derives a stable opaque room ID and a distinct signaling key", async () => {
     const secret = crypto.getRandomValues(new Uint8Array(32));
     const first = await deriveRoomKeys(secret);

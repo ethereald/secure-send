@@ -13,7 +13,7 @@ A browser-only, end-to-end encrypted file transfer service hosted on the Cloudfl
 | R3 | Anyone visiting can create a session with a hard-to-guess ID | The browser generates the secret with `crypto.getRandomValues` (32 bytes, 43 base64url characters). Turnstile and rate limiting protect room creation. |
 | R4 | QR code + URL to share | The QR code is rendered on the client from the full URL, including the fragment. |
 | R5 | Peers see each other by nickname and pick a target device | The DO keeps a roster. Nicknames are encrypted with the room key, so the server sees only opaque peer IDs. |
-| R6 | Encrypted transfer, no files left on the server | Files go over a WebRTC DataChannel (DTLS) with an extra application-layer AES-256-GCM layer. The fallback relay only forwards ciphertext held in memory; it never persists anything. |
+| R6 | Encrypted transfer, no files left on the server | Files go over a WebRTC DataChannel (DTLS) with an extra application-layer AES-256-GCM layer. File relay is not implemented. |
 | R7 | Prevent man-in-the-middle (MITM) attacks | Signaling is AEAD-encrypted with a key derived from the secret. The DTLS fingerprint is bound inside the encrypted signaling. ECDH identity keys are exchanged, and both sides can compare a Short Authentication String (SAS). |
 | R8 | Creator sets the TTL; only the creating page can change or extend it | The host's ECDSA key is non-extractable and stored in IndexedDB on the creating browser. The DO verifies a signed challenge before applying any TTL change. A DO alarm enforces expiry. |
 | R9 | Either side can terminate at any time | Any peer can close its own peer connection or leave the room. The host can destroy the room for everyone. |
@@ -31,8 +31,7 @@ A browser-only, end-to-end encrypted file transfer service hosted on the Cloudfl
 | Abuse control | Cloudflare Turnstile (free) and the Workers Rate Limiting binding | Prevents mass room creation |
 | P2P transport | WebRTC `RTCDataChannel` | Direct device-to-device transfer; files bypass Cloudflare |
 | NAT traversal | `stun:stun.cloudflare.com:3478` | Free |
-| Fallback transport | Encrypted chunk relay through the room DO's WebSocket | Used when P2P fails (symmetric NAT). Ciphertext only, in memory only, no per-file size cap (credit-based flow control). |
-| Optional TURN | Cloudflare Realtime TURN | Can be enabled later. Check current free-tier and pricing first. |
+| Fallback transport | Cloudflare Realtime TURN, optionally configured | Used by WebRTC when direct connectivity is blocked; the Worker requests short-lived credentials from Cloudflare. TURN usage is subject to Cloudflare Realtime pricing. |
 | Crypto | WebCrypto: HKDF-SHA-256, ECDH P-256, ECDSA P-256, AES-256-GCM | Native, audited, and available in both browsers and Workers |
 | Frontend | TypeScript + Vite + Preact (small bundle), `qrcode-generator` | Small attack surface. No third-party runtime CDNs. |
 | Large downloads | Service Worker stream (StreamSaver pattern) | Avoids holding multi-GB blobs in RAM |
@@ -532,9 +531,9 @@ secure-send/
 |---|---|---|
 | D1 | Room size | Up to **4 devices** per session (full mesh, at most 6 peer connections). Any device can send to any other. |
 | D2 | Accepting files | The receiver is **prompted to approve every transfer**. No auto-accept. |
-| D3 | Fallback relay | **Enabled, no per-file size cap.** Bounded by credit-based flow control. The free daily quota is the only ceiling, and transfers resume once it resets. |
+| D3 | WebSocket file relay | **Not implemented.** Transfers require a working WebRTC DataChannel, which can use TURN when configured. |
 | D4 | Max TTL | **24 h** total, minimum 5 min. Only the host can extend. |
-| D5 | TURN | Deferred. Decide after measuring the P2P failure rate in real use. |
+| D5 | TURN | Optional. Configure Cloudflare Realtime TURN with `TURN_KEY_ID` and the Worker secret `TURN_API_TOKEN`; STUN remains the default. |
 
 ---
 
@@ -551,7 +550,7 @@ Status of the MVP relative to the plan above:
 
 Behavior added after the first draft:
 
-- **Dev mode.** `DEV_MODE=1` (set by `local.ps1` / `local.sh`) skips Turnstile, the rate limiter and the `CF-Connecting-IP` requirement; `/api/config` returns `devMode` and the UI hides the Turnstile widget. Never enable it in production.
+- **Dev mode.** `DEV_MODE=1` (set by `local.ps1` / `local.sh`) skips Turnstile, the room-creation and ICE-config rate limiters, and the `CF-Connecting-IP` requirement; `/api/config` returns `devMode` and the UI hides the Turnstile widget. Never enable it in production.
 - **LAN testing.** `-Lan` / `--lan` runs wrangler on `0.0.0.0` with a self-signed HTTPS certificate. HTTPS is required because WebCrypto needs a secure context off localhost.
 - **Random nickname.** Each visitor gets a default "Adjective Animal" nickname that can be edited.
 - **Auto-rejoin.** When the socket closes, or the page returns to the foreground (`visibilitychange` / `pageshow`) with a dead socket or disconnected peer, the client re-enters the room (up to 6 attempts) using the secret kept in sessionStorage. This covers iOS suspending a backgrounded tab. In-progress transfers are cancelled, and a locked room refuses reconnects. Leaving on purpose, being kicked, or the session ending clears the rejoin state.

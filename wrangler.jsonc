@@ -17,10 +17,15 @@
       "name": "CREATE_LIMITER",
       "namespace_id": "1001",
       "simple": { "limit": 10, "period": 60 }
+    },
+    {
+      "name": "ICE_LIMITER",
+      "namespace_id": "1002",
+      "simple": { "limit": 30, "period": 60 }
     }
   ],
   "vars": {
-    "TURNSTILE_SITE_KEY": "0x4AAAAAAFyQRmDpxJcgueO0"
+    "TURNSTILE_SITE_KEY": "0x4AAAAAAFyQRmDpxJcgueO0",
+    "TURN_KEY_ID": ""
   }
 }
-

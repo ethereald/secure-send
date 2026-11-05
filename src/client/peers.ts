@@ -131,9 +131,7 @@ export class PeerMesh {
   private addPeer(id: string): PeerState {
     const existing = this.peers.get(id);
     if (existing) return existing;
-    const connection = new RTCPeerConnection({
-      iceServers: [{ urls: "stun:stun.cloudflare.com:3478" }],
-    });
+    const connection = new RTCPeerConnection({ iceServers: this.session.iceServers });
     const peer: PeerState = {
       id,
       nickname: "Connecting…",
