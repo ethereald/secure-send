@@ -41,7 +41,7 @@ export async function saveReadyFile(ready: ReadyFile, allowShare = true): Promis
 
 export interface DownloadSink {
   write(bytes: ArrayBuffer): Promise<void>;
-  close(): void;
+  close(): void | Promise<void>;
   abort(reason: string): void;
 }
 

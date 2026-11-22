@@ -7,6 +7,7 @@ import {
   toBase64Url,
 } from "./crypto";
 import { beginDownload, sanitizeFilename, type DownloadSink } from "./download-sink";
+import { clipboardSink, MAX_CLIPBOARD_BYTES, type ClipboardContent } from "./clipboard";
 
 const CHUNK_SIZE = 64 * 1024;
 const HIGH_WATER_MARK = 4 * 1024 * 1024;
@@ -20,6 +21,7 @@ export interface IncomingFileOffer {
   size: number;
   mime: string;
   from: string;
+  kind: "file" | "clipboard";
   accept(): Promise<void>;
   decline(): void;
 }
@@ -46,6 +48,7 @@ interface IncomingTransfer {
   name: string;
   size: number;
   mime: string;
+  kind: "file" | "clipboard";
   sink: DownloadSink;
   nextIndex: number;
   received: number;
@@ -54,6 +57,7 @@ interface IncomingTransfer {
 
 interface TransferEvents {
   onIncoming(offer: IncomingFileOffer): void;
+  onClipboard(peerId: string, content: ClipboardContent): void;
   onProgress(peerId: string, fileName: string, percent: number, direction: "send" | "receive"): void;
   onMessage(peerId: string, message: string): void;
 }
@@ -97,6 +101,11 @@ export class TransferManager {
     for (const file of Array.from(files)) await this.offerFile(peerId, file);
   }
 
+  async sendClipboard(peerId: string, file: File): Promise<void> {
+    if (file.size > MAX_CLIPBOARD_BYTES) throw new Error("Clipboard content exceeds the 10 MiB limit.");
+    await this.offerFile(peerId, file, "clipboard");
+  }
+
   cancelPeer(peerId: string): void {
     for (const [id, pendingPeerId] of this.pendingOffers) {
       if (pendingPeerId === peerId) this.pendingOffers.delete(id);
@@ -122,7 +131,7 @@ export class TransferManager {
     this.dataQueues.delete(peerId);
   }
 
-  private async offerFile(peerId: string, file: File): Promise<void> {
+  private async offerFile(peerId: string, file: File, kind: "file" | "clipboard" = "file"): Promise<void> {
     const rootKey = this.requireRootKey(peerId);
     const fileId = crypto.getRandomValues(new Uint8Array(16));
     const id = toBase64Url(fileId);
@@ -135,6 +144,7 @@ export class TransferManager {
         name: sanitizeFilename(file.name),
         size: file.size,
         mime: file.type || "application/octet-stream",
+        ...(kind === "clipboard" ? { kind } : {}),
       })),
     );
     let resolveAccepted!: () => void;
@@ -276,7 +286,7 @@ export class TransferManager {
     const id = message.id;
     let fileId: Uint8Array;
     let fileKey: CryptoKey;
-    let metadata: { name: string; size: number; mime: string };
+    let metadata: { name: string; size: number; mime: string; kind: "file" | "clipboard" };
     try {
       fileId = fromBase64Url(message.id);
       fileKey = await deriveFileKey(this.requireRootKey(peerId), fileId);
@@ -295,10 +305,12 @@ export class TransferManager {
         !Number.isSafeInteger((decoded as Record<string, unknown>).size) ||
         typeof (decoded as Record<string, unknown>).mime !== "string"
       ) return;
-      const values = decoded as { name: string; size: number; mime: string };
+      const values = decoded as { name: string; size: number; mime: string; kind?: unknown };
       if (values.size < 0) return;
-      metadata = { ...values, name: sanitizeFilename(values.name) };
+      if (values.kind !== undefined && values.kind !== "clipboard") return;
+      metadata = { ...values, name: sanitizeFilename(values.name), kind: values.kind === "clipboard" ? "clipboard" : "file" };
       if (metadata.name.length > 180 || metadata.mime.length > 256 || metadata.size > Number.MAX_SAFE_INTEGER) return;
+      if (metadata.kind === "clipboard" && (metadata.size < 8 || metadata.size > MAX_CLIPBOARD_BYTES)) return;
     } catch {
       return;
     }
@@ -326,7 +338,9 @@ export class TransferManager {
       this.pendingOffers.delete(id);
       let sink: DownloadSink | undefined;
       try {
-        sink = await beginDownload(id, metadata.name, metadata.size);
+        sink = metadata.kind === "clipboard"
+          ? clipboardSink(metadata.size, (content) => this.events.onClipboard(peerId, content))
+          : await beginDownload(id, metadata.name, metadata.size);
         const transfer: IncomingTransfer = {
           id,
           fileId,
@@ -335,6 +349,7 @@ export class TransferManager {
           name: metadata.name,
           size: metadata.size,
           mime: metadata.mime,
+          kind: metadata.kind,
           sink,
           nextIndex: 0,
           received: 0,
@@ -355,6 +370,7 @@ export class TransferManager {
       size: metadata.size,
       mime: metadata.mime,
       from: peerId,
+      kind: metadata.kind,
       accept: async () => {
         window.clearTimeout(timeout);
         await accept();
@@ -387,11 +403,11 @@ export class TransferManager {
       transfer.nextIndex += 1;
       this.events.onProgress(peerId, transfer.name, final || transfer.size === 0 ? 100 : Math.min(99, Math.round((transfer.received / Math.max(transfer.size, transfer.received)) * 100)), "receive");
       if (final) {
-        transfer.sink.close();
+        await transfer.sink.close();
         window.clearTimeout(transfer.timeout);
         this.incoming.delete(id);
         this.sendControl(peerId, { type: "done", id, ok: true });
-        this.events.onMessage(peerId, `${transfer.name} downloaded.`);
+        this.events.onMessage(peerId, transfer.kind === "clipboard" ? "Clipboard content received. Copy it when ready." : `${transfer.name} downloaded.`);
       }
     } catch (error) {
       console.error("Chunk failed", index, error);

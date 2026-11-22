@@ -1,4 +1,4 @@
-import { fromBase64Url, openSignal, sealSignal, type RoomKeys } from "./crypto";
+import { fromBase64Url, openSignal, sealSignal, toBase64Url, type RoomKeys } from "./crypto";
 
 export interface WelcomeMessage {
   type: "welcome";
@@ -226,6 +226,21 @@ export function secretFromLocation(): Uint8Array | null {
   } catch {
     return null;
   }
+}
+
+export function inviteUrlForSecret(secret: Uint8Array, href: string, lanAddress?: string): string {
+  const invite = new URL(href);
+  const octets = lanAddress?.split(".");
+  if (
+    lanAddress !== undefined &&
+    (invite.hostname === "localhost" || invite.hostname === "127.0.0.1" || invite.hostname === "[::1]") &&
+    octets?.length === 4 &&
+    octets.every((octet) => /^(0|[1-9]\d{0,2})$/.test(octet) && Number(octet) <= 255) &&
+    Number(octets[0]) !== 127 &&
+    lanAddress !== "0.0.0.0"
+  ) invite.hostname = lanAddress;
+  invite.hash = toBase64Url(secret);
+  return invite.href;
 }
 
 export function stripSecretFromAddressBar(): void {

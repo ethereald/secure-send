@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: ./local.sh [start|stop|restart|status] [--lan]
+# Usage: ./local.sh [start|stop|restart|status] [--lan] [--lan-address IPv4]
 # Works on macOS, Linux and WSL.
 set -euo pipefail
 
@@ -10,13 +10,17 @@ PORT=8787
 
 ACTION="start"
 LAN=0
-for arg in "$@"; do
+LAN_ADDRESS=""
+while [ "$#" -gt 0 ]; do
+  arg="$1"
   case "$arg" in
     start|stop|restart|status) ACTION="$arg" ;;
     --lan|-l) LAN=1 ;;
+    --lan-address) shift; LAN_ADDRESS="${1:?Missing LAN IPv4 address}" ;;
     -h|--help) sed -n '2,3p' "$0"; exit 0 ;;
     *) echo "Unknown argument: $arg" >&2; exit 2 ;;
   esac
+  shift
 done
 SCHEME=http
 [ "$LAN" = 1 ] && SCHEME=https
@@ -41,14 +45,6 @@ port_in_use() {
     lsof -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1
   else
     (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null
-  fi
-}
-
-lan_ips() {
-  if command -v hostname >/dev/null 2>&1 && hostname -I >/dev/null 2>&1; then
-    hostname -I | tr ' ' '\n' | grep -E '^[0-9]+\.' || true
-  elif command -v ipconfig >/dev/null 2>&1; then
-    for iface in en0 en1; do ipconfig getifaddr "$iface" 2>/dev/null || true; done
   fi
 }
 
@@ -86,7 +82,15 @@ do_start() {
 
   local args=(node node_modules/wrangler/bin/wrangler.js dev --port "$PORT" --var DEV_MODE:1)
   # HTTPS is required off-localhost: WebCrypto is only available in secure contexts
-  [ "$LAN" = 1 ] && args+=(--ip 0.0.0.0 --local-protocol https)
+  if [ "$LAN" = 1 ]; then
+    if [ -z "$LAN_ADDRESS" ]; then
+      LAN_ADDRESS="$(node scripts/lan-address.mjs)" || { echo "Specify the host IPv4 address with --lan-address." >&2; exit 1; }
+    fi
+    node -e 'const net = require("node:net"); const ip = process.argv[1]; if (net.isIP(ip) !== 4 || ip.startsWith("127.") || ip === "0.0.0.0") process.exit(1)' "$LAN_ADDRESS" || {
+      echo "LAN address must be a non-loopback IPv4 address." >&2; exit 1;
+    }
+    args+=(--ip 0.0.0.0 --local-protocol https --var "LAN_ADDRESS:$LAN_ADDRESS")
+  fi
   nohup "${args[@]}" >"$LOG" 2>&1 </dev/null &
   pid=$!
   echo "$pid" >"$PID_FILE"
@@ -102,9 +106,7 @@ do_start() {
     if curl -sk -m 2 -o /dev/null "$SCHEME://localhost:$PORT/api/config"; then
       echo "secure-send running (PID $pid) at $SCHEME://localhost:$PORT"
       if [ "$LAN" = 1 ]; then
-        lan_ips | while read -r ip; do
-          [ -n "$ip" ] && echo "LAN: https://$ip:$PORT  (accept the self-signed cert warning)"
-        done
+        echo "LAN invite address: https://$LAN_ADDRESS:$PORT  (accept the self-signed cert warning)"
       fi
       echo "Local dev mode: Turnstile disabled. Stop with './local.sh stop'."
       return

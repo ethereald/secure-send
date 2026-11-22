@@ -25,6 +25,7 @@ interface Env {
   TURNSTILE_SECRET?: string;
   TURNSTILE_SITE_KEY?: string;
   DEV_MODE?: string;
+  LAN_ADDRESS?: string;
 }
 
 const SECURITY_HEADERS: Record<string, string> = {
@@ -154,6 +155,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     return jsonResponse({
       turnstileSiteKey: env.TURNSTILE_SITE_KEY ?? "",
       devMode: env.DEV_MODE === "1",
+      ...(env.DEV_MODE === "1" && env.LAN_ADDRESS ? { lanAddress: env.LAN_ADDRESS } : {}),
     });
   }
   if (url.pathname === "/api/rooms" && request.method === "POST") {

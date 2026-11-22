@@ -9,14 +9,16 @@ import {
 } from "./crypto";
 import { deleteHostPrivateKey, loadHostPrivateKey, saveHostPrivateKey } from "./host-key-store";
 import { PeerMesh, type PeerView } from "./peers";
-import { RoomSession, secretFromLocation, stripSecretFromAddressBar } from "./session";
+import { inviteUrlForSecret, RoomSession, secretFromLocation, stripSecretFromAddressBar } from "./session";
 import type { IncomingFileOffer } from "./transfer";
 import { isIosLike, onFileReady, saveReadyFile, type ReadyFile } from "./download-sink";
+import { readClipboardFile, writeClipboard, type ClipboardContent } from "./clipboard";
 import "./style.css";
 
 interface AppConfig {
   turnstileSiteKey: string;
   devMode?: boolean;
+  lanAddress?: string;
 }
 
 interface RoomState {
@@ -121,6 +123,7 @@ function App(): preact.JSX.Element {
   const [offers, setOffers] = useState<IncomingFileOffer[]>([]);
   const [progress, setProgress] = useState<TransferProgress[]>([]);
   const [readyFiles, setReadyFiles] = useState<ReadyFile[]>([]);
+  const [clipboardItems, setClipboardItems] = useState<Array<{ peerId: string; content: ClipboardContent }>>([]);
   useEffect(() => onFileReady((ready) => setReadyFiles((current) => [...current, ready])), []);
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
@@ -144,6 +147,7 @@ function App(): preact.JSX.Element {
       roomRef.current?.mesh.leave(true);
       setPeers([]);
       setOffers([]);
+      setClipboardItems([]);
       setProgress([]);
       for (let attempt = 0; attempt < 6; attempt += 1) {
         try {
@@ -250,10 +254,9 @@ function App(): preact.JSX.Element {
       if (!response.ok || typeof result.expiresAt !== "number") {
         throw new Error(result.error ?? "Could not create the room.");
       }
-      const invite = new URL(location.href);
-      invite.hash = toBase64Url(secret);
+      const invite = inviteUrlForSecret(secret, location.href);
       history.replaceState(null, "", `${location.pathname}${location.search}`);
-      await enterRoom(keys, nickname, hostKeys.privateKey, invite.href, result.expiresAt, false);
+      await enterRoom(keys, nickname, hostKeys.privateKey, invite, result.expiresAt, false);
     } catch (error) {
       sessionStorage.removeItem("secure-send-secret");
       if (roomId) await deleteHostPrivateKey(roomId).catch(() => undefined);
@@ -306,6 +309,7 @@ function App(): preact.JSX.Element {
         setOffers((current) => current.filter((offer) => next.some((peer) => peer.id === offer.from)));
       },
       onIncoming: (offer) => setOffers((current) => [...current.filter((item) => item.id !== offer.id), offer]),
+      onClipboard: (peerId, content) => setClipboardItems((current) => [...current, { peerId, content }]),
       onProgress: (peerId, filename, percent, direction) => {
         const key = `${peerId}:${filename}:${direction}`;
         setProgress((current) => {
@@ -328,6 +332,8 @@ function App(): preact.JSX.Element {
           mesh.leave();
           setRoom(null);
           setPeers([]);
+          setOffers([]);
+          setClipboardItems([]);
           setNotice(message.type === "kicked" ? "You were removed from the room." : "This room has ended.");
         } else if (message.type === "connection-closed") {
           if (rejoinParams.current) {
@@ -344,14 +350,15 @@ function App(): preact.JSX.Element {
       },
     });
     await mesh.start();
-    rejoinParams.current = { keys, name, hostKey, inviteUrl };
+    const actualInviteUrl = inviteUrl ?? inviteUrlForSecret(keys.secret, location.href);
+    rejoinParams.current = { keys, name, hostKey, inviteUrl: actualInviteUrl };
     setJoinKeys(null);
     setIsInvite(false);
     setRoom({
       session,
       mesh,
       hostKey,
-      inviteUrl,
+      inviteUrl: actualInviteUrl,
       expiresAt: actualExpiry,
       locked: session.welcome.isLocked,
     });
@@ -421,15 +428,28 @@ function App(): preact.JSX.Element {
     setRoom(null);
     setPeers([]);
     setOffers([]);
+    setClipboardItems([]);
     setProgress([]);
     setNotice("You left the room.");
   }
 
   function copyInvite(): void {
     if (!room?.inviteUrl) return;
-    void navigator.clipboard.writeText(room.inviteUrl)
+    if (!navigator.clipboard?.writeText) return setNotice("Clipboard access is unavailable in this browser.");
+    const invite = inviteUrlForSecret(room.session.keys.secret, room.inviteUrl, config.devMode ? config.lanAddress : undefined);
+    void navigator.clipboard.writeText(invite)
       .then(() => setNotice("Invite link copied. Share it only with people you trust."))
-      .catch(() => setNotice("Could not copy the invite link. Select and copy it manually."));
+      .catch(() => setNotice("Could not copy the invite link. Check clipboard permissions and try again."));
+  }
+
+  async function sendClipboard(peerId: string): Promise<void> {
+    if (!room) return;
+    try {
+      const file = await readClipboardFile();
+      await room.mesh.sendClipboard(peerId, file);
+    } catch (error) {
+      setNotice(error instanceof Error ? `Could not share clipboard: ${error.message}` : "Could not share clipboard.");
+    }
   }
 
   if (room) {
@@ -495,6 +515,9 @@ function App(): preact.JSX.Element {
                     >
                       Send files
                     </button>
+                    <button class="button small" disabled={peer.status !== "connected"} onClick={() => void sendClipboard(peer.id)}>
+                      Send clipboard
+                    </button>
                     {room.hostKey && <button class="icon-button" title="Remove device" onClick={() => void doHostAction("kick", { peerId: peer.id })}>×</button>}
                   </div>
                 </article>
@@ -516,7 +539,7 @@ function App(): preact.JSX.Element {
             />
             {offers.length > 0 && (
               <section class="incoming-list" aria-live="polite">
-                <h2>Incoming file requests</h2>
+                <h2>Incoming requests</h2>
                 {offers.map((offer) => (
                   <IncomingOffer
                     key={offer.id}
@@ -524,6 +547,26 @@ function App(): preact.JSX.Element {
                     peer={peers.find((peer) => peer.id === offer.from)?.nickname ?? "A device"}
                     onRemove={() => setOffers((current) => current.filter((item) => item.id !== offer.id))}
                   />
+                ))}
+              </section>
+            )}
+            {clipboardItems.length > 0 && (
+              <section class="incoming-list" aria-live="polite">
+                <h2>Received clipboard content</h2>
+                {clipboardItems.map((item, index) => (
+                  <div class="offer-card" key={index}>
+                    <div>
+                      <strong>{item.content.image ? (item.content.text !== undefined ? "Text and image" : "Image") : "Text"}</strong>
+                      <span>From {peers.find((peer) => peer.id === item.peerId)?.nickname ?? "a device"}</span>
+                    </div>
+                    <button class="button primary small" onClick={() => {
+                      void writeClipboard(item.content).then(() => {
+                        setClipboardItems((current) => current.filter((entry) => entry !== item));
+                        setNotice("Clipboard content copied.");
+                      }).catch(() => setNotice("Could not copy clipboard content. Check browser support and clipboard permissions."));
+                    }}>Copy to clipboard</button>
+                    <button class="button subtle small" onClick={() => setClipboardItems((current) => current.filter((entry) => entry !== item))}>Dismiss</button>
+                  </div>
                 ))}
               </section>
             )}
@@ -565,17 +608,11 @@ function App(): preact.JSX.Element {
               <section class="panel share-panel">
                 <p class="eyebrow">INVITE A DEVICE</p>
                 <h2>Share this room</h2>
-                <QrCode value={room.inviteUrl} />
+                <QrCode value={inviteUrlForSecret(room.session.keys.secret, room.inviteUrl, config.devMode ? config.lanAddress : undefined)} />
                 <button class="button primary wide" onClick={copyInvite}>Copy private invite</button>
                 <p class="fine-print">Anyone with this link can join. Downloads follow browser settings; iOS may require “Save to Files”.</p>
               </section>
-            ) : (
-              <section class="panel">
-                <p class="eyebrow">ROOM LINK</p>
-                <h2>You joined as a guest</h2>
-                <p class="muted">Ask the room host to share the invite link with another device.</p>
-              </section>
-            )}
+            ) : null}
             {room.hostKey && (
               <section class="panel host-panel">
                 <p class="eyebrow">HOST CONTROLS</p>
@@ -706,7 +743,7 @@ function IncomingOffer(props: {
     <article class="offer-card">
       <div>
         <strong>{props.offer.name}</strong>
-        <span>{props.peer} wants to send · {formatBytes(props.offer.size)}</span>
+        <span>{props.peer} wants to send {props.offer.kind === "clipboard" ? "clipboard content" : "a file"} · {formatBytes(props.offer.size)}</span>
       </div>
       <button
         class="button primary small"

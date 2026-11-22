@@ -1,7 +1,8 @@
-# Usage: .\local.ps1 [start|stop|restart|status] [-Lan]
+# Usage: .\local.ps1 [start|stop|restart|status] [-Lan] [-LanAddress <IPv4>]
 param(
   [ValidateSet("start", "stop", "restart", "status")][string]$Action = "start",
-  [switch]$Lan
+  [switch]$Lan,
+  [string]$LanAddress
 )
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
@@ -41,7 +42,17 @@ function Start-Server {
   $wrangler = Join-Path $PSScriptRoot "node_modules\wrangler\bin\wrangler.js"
   $wargs = @("`"$wrangler`"", "dev", "--port", $port, "--var", "DEV_MODE:1")
   # HTTPS is required off-localhost: WebCrypto is only available in secure contexts
-  if ($Lan) { $wargs += @("--ip", "0.0.0.0", "--local-protocol", "https") }
+  if ($Lan) {
+    if (-not $LanAddress) {
+      $LanAddress = node scripts\lan-address.mjs
+      if ($LASTEXITCODE -ne 0) { throw "Specify the host IPv4 address with -LanAddress." }
+    }
+    $ip = $null
+    if (-not [System.Net.IPAddress]::TryParse($LanAddress, [ref]$ip) -or $ip.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork -or [System.Net.IPAddress]::IsLoopback($ip) -or $ip.ToString() -ne $LanAddress -or $LanAddress -eq "0.0.0.0") {
+      throw "LanAddress must be a non-loopback IPv4 address."
+    }
+    $wargs += @("--ip", "0.0.0.0", "--local-protocol", "https", "--var", "LAN_ADDRESS:$LanAddress")
+  }
   $proc = Start-Process node -ArgumentList $wargs -WorkingDirectory $PSScriptRoot `
     -WindowStyle Hidden -PassThru -RedirectStandardOutput $log -RedirectStandardError "$log.err"
   $proc.Id | Set-Content $pidFile
@@ -53,9 +64,7 @@ function Start-Server {
     if ($LASTEXITCODE -eq 0) {
       Write-Host "secure-send running (PID $($proc.Id)) at ${scheme}://localhost:$port"
       if ($Lan) {
-        Get-NetIPAddress -AddressFamily IPv4 |
-          Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.254.*" } |
-          ForEach-Object { Write-Host "LAN: https://$($_.IPAddress):$port  (accept the self-signed cert warning)" }
+        Write-Host "LAN invite address: https://${LanAddress}:$port  (accept the self-signed cert warning)"
       }
       Write-Host "Local dev mode: Turnstile disabled. Stop with '.\local.ps1 stop'."
       return

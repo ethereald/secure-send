@@ -86,7 +86,8 @@ h1, h2, p { margin-top: 0; }
 .peer-info > span { color: #8b96a8; font-size: 10px; }
 .status-dot { flex: 0 0 8px; width: 8px; height: 8px; border-radius: 50%; background: #a7b0be; }
 .status-dot.online { background: #35bd78; box-shadow: 0 0 0 3px #35bd781c; }
-.peer-actions { display: flex; align-items: center; gap: 5px; }
+.peer-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.peer-actions .button:not(.primary):not(.subtle):not(.secondary):not(.danger) { color: #4f49c9; background: #f0efff; }
 .icon-button { width: 27px; height: 27px; border: 0; border-radius: 50%; color: #9ba5b3; background: transparent; font-size: 20px; }
 .icon-button:hover { color: #b94b4b; background: #fff0f0; }
 .sas { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: 7px; color: #655de5; font-size: 10px; }

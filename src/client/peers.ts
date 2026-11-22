@@ -8,6 +8,7 @@ import {
 } from "./crypto";
 import { RoomSession } from "./session";
 import { TransferManager, type IncomingFileOffer } from "./transfer";
+import type { ClipboardContent } from "./clipboard";
 
 export interface PeerView {
   id: string;
@@ -34,6 +35,7 @@ interface PeerState extends PeerView {
 export interface PeerEvents {
   onPeers(peers: PeerView[]): void;
   onIncoming(offer: IncomingFileOffer): void;
+  onClipboard(peerId: string, content: ClipboardContent): void;
   onProgress(peerId: string, fileName: string, percent: number, direction: "send" | "receive"): void;
   onMessage(peerId: string, message: string): void;
   onRoomEvent(message: Record<string, unknown>): void;
@@ -56,6 +58,7 @@ export class PeerMesh {
     this.events = events;
     this.transfers = new TransferManager({
       onIncoming: (offer) => this.events.onIncoming(offer),
+      onClipboard: (id, content) => this.events.onClipboard(id, content),
       onProgress: (id, name, percent, direction) => this.events.onProgress(id, name, percent, direction),
       onMessage: (id, message) => this.events.onMessage(id, message),
     });
@@ -75,6 +78,10 @@ export class PeerMesh {
 
   async sendFiles(peerId: string, files: FileList | File[]): Promise<void> {
     await this.transfers.sendFiles(peerId, files);
+  }
+
+  async sendClipboard(peerId: string, file: File): Promise<void> {
+    await this.transfers.sendClipboard(peerId, file);
   }
 
   setVerified(peerId: string, verified: boolean): void {
